@@ -1,0 +1,5 @@
+python-telegram-bot
+python-dotenv
+requests
+yt-dlp
+gallery-dl
