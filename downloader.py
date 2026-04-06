@@ -126,19 +126,18 @@ def download_instagram(url: str, output_dir: str) -> tuple[str | list[str], str,
         logger.info("Downloaded %s (%s) — caption length: %d", media_path, media_type, len(caption))
         return media_path, media_type, caption
 
-    except (yt_dlp.utils.DownloadError, FileNotFoundError) as e:
-        if isinstance(e, yt_dlp.utils.DownloadError) and "No video formats found" not in str(e):
-            raise  # Re-raise if it's a different error
+    except Exception as e:
+        logger.warning(f"yt-dlp failed (this is normal for photo posts): {e}")
 
         # ── Photo post fallback using gallery-dl ───────────────────────────
-        logger.info("No video found — trying photo download with gallery-dl for: %s", url)
+        logger.info("Trying photo download fallback with gallery-dl for: %s", url)
         
         try:
             return _download_with_gallery_dl(url, output_dir)
         except Exception as fallback_e:
             logger.exception("gallery-dl photo fallback failed")
             raise FileNotFoundError(
-                f"Could not download this photo post: {fallback_e}\n"
+                f"Could not download this post (Video & Photo endpoints both failed): {fallback_e}\n"
                 "Make sure the post is public and the URL is correct."
             ) from e
 
