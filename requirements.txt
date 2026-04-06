@@ -3,3 +3,4 @@ python-dotenv
 requests
 yt-dlp
 gallery-dl
+imageio-ffmpeg
