@@ -251,9 +251,26 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     finally:
         shutil.rmtree(str(session["tmp_dir"]), ignore_errors=True)
 
+def _run_dummy_server():
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+    class DummyHandler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header('Content-type', 'text/plain')
+            self.end_headers()
+            self.wfile.write(b"Bot is running!")
+    
+    port = int(os.environ.get("PORT", 8000))
+    server = HTTPServer(("0.0.0.0", port), DummyHandler)
+    server.serve_forever()
+
 def main() -> None:
     if not TELEGRAM_TOKEN:
         raise RuntimeError("TELEGRAM_BOT_TOKEN is not set in environment")
+    
+    # Start a dummy web server on a background thread so Koyeb health checks pass
+    import threading
+    threading.Thread(target=_run_dummy_server, daemon=True).start()
     
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
