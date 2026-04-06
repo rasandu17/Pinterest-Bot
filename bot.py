@@ -9,6 +9,26 @@ import logging
 from dotenv import load_dotenv
 load_dotenv()
 
+# Decode Base64 cookies from environment for cloud hosting (Koyeb Option B)
+import base64
+if os.getenv("INSTAGRAM_COOKIES_B64"):
+    try:
+        with open("instagram_cookies.txt", "w", encoding="utf-8") as f:
+            f.write(base64.b64decode(os.getenv("INSTAGRAM_COOKIES_B64")).decode("utf-8"))
+        os.environ["INSTAGRAM_COOKIES_FILE"] = "instagram_cookies.txt"
+    except Exception as e:
+        import logging
+        logging.error(f"Error decoding IG cookies: {e}")
+
+if os.getenv("PINTEREST_COOKIES_B64"):
+    try:
+        with open("pinterest_cookies.txt", "w", encoding="utf-8") as f:
+            f.write(base64.b64decode(os.getenv("PINTEREST_COOKIES_B64")).decode("utf-8"))
+        os.environ["PINTEREST_COOKIES_FILE"] = "pinterest_cookies.txt"
+    except Exception as e:
+        import logging
+        logging.error(f"Error decoding Pinterest cookies: {e}")
+
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton, InputMediaPhoto, InputMediaVideo
 from telegram.ext import (
     ApplicationBuilder,
