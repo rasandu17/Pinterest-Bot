@@ -127,11 +127,8 @@ def download_instagram(url: str, output_dir: str) -> tuple[str | list[str], str,
         return media_path, media_type, caption
 
     except (yt_dlp.utils.DownloadError, FileNotFoundError) as e:
-        if isinstance(e, yt_dlp.utils.DownloadError) and "No video formats found" not in str(e):
-            raise  # Re-raise if it's a different error
-
-        # ── Photo post fallback using gallery-dl ───────────────────────────
-        logger.info("No video found — trying photo download with gallery-dl for: %s", url)
+        # ── Ultimate Fallback using gallery-dl ───────────────────────────
+        logger.info("yt-dlp failed — trying fallback download with gallery-dl for: %s", url)
         
         try:
             return _download_with_gallery_dl(url, output_dir)
@@ -144,7 +141,7 @@ def download_instagram(url: str, output_dir: str) -> tuple[str | list[str], str,
 
 
 def _download_with_gallery_dl(url: str, output_dir: str) -> tuple[str | list[str], str, str]:
-    """Fallback photo downloader using gallery-dl. Supports multiple photos (carousels)."""
+    """Fallback downloader using gallery-dl. Supports videos, photos, and carousels."""
     import subprocess
     import json
     import glob
@@ -180,20 +177,25 @@ def _download_with_gallery_dl(url: str, output_dir: str) -> tuple[str | list[str
         except Exception as e:
             logger.warning("Failed to parse gallery-dl json: %s", e)
 
-    # Find all downloaded images
+    # Find all downloaded media (videos and photos)
     for root, _, sorted_files in os.walk(output_dir):
         for f in sorted(sorted_files):
             ext = Path(f).suffix.lower()
-            if ext in {".jpg", ".jpeg", ".png", ".webp"}:
+            if ext in {".mp4", ".mkv", ".webm", ".mov", ".avi", ".jpg", ".jpeg", ".png", ".webp"}:
                 image_paths.append(os.path.join(root, f))
 
     if not image_paths:
-        raise ValueError("No images found by gallery-dl (could be a private post or video).")
+        raise ValueError("No media found by gallery-dl (could be a strictly private post).")
 
     final_path = image_paths[0] if len(image_paths) == 1 else image_paths
-    logger.info("gallery-dl downloaded %d image(s)", len(image_paths))
+    logger.info("gallery-dl downloaded %d item(s)", len(image_paths))
     
-    return final_path, "image", caption
+    # Determine the media type based on the first item's extension
+    first_path = image_paths[0]
+    first_ext = Path(first_path).suffix.lower()
+    media_type = "video" if first_ext in {".mp4", ".mkv", ".webm", ".mov", ".avi"} else "image"
+    
+    return final_path, media_type, caption
 
 
 def _find_media_file(directory: str) -> str | None:
