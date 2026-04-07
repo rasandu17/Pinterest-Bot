@@ -127,17 +127,87 @@ def download_instagram(url: str, output_dir: str) -> tuple[str | list[str], str,
         return media_path, media_type, caption
 
     except (yt_dlp.utils.DownloadError, FileNotFoundError) as e:
-        # ── Ultimate Fallback using gallery-dl ───────────────────────────
-        logger.info("yt-dlp failed — trying fallback download with gallery-dl for: %s", url)
-        
+        # ── Fallback 1: gallery-dl ────────────────────────────────────────
+        logger.info("yt-dlp failed — trying gallery-dl for: %s", url)
         try:
             return _download_with_gallery_dl(url, output_dir)
-        except Exception as fallback_e:
-            logger.exception("gallery-dl photo fallback failed")
+        except Exception as gallery_e:
+            logger.warning("gallery-dl also failed: %s", gallery_e)
+
+        # ── Fallback 2: Cobalt API (cookie-free public downloader) ────────
+        logger.info("gallery-dl failed — trying Cobalt API for: %s", url)
+        try:
+            return _download_with_cobalt(url, output_dir)
+        except Exception as cobalt_e:
+            logger.exception("Cobalt API fallback also failed")
             raise FileNotFoundError(
-                f"Could not download this photo post: {fallback_e}\n"
+                f"All download methods failed.\n"
+                f"yt-dlp: {e}\n"
+                f"gallery-dl: {gallery_e}\n"
+                f"Cobalt: {cobalt_e}\n"
                 "Make sure the post is public and the URL is correct."
             ) from e
+
+
+def _download_with_cobalt(url: str, output_dir: str) -> tuple[str | list[str], str, str]:
+    """Third-layer fallback using Cobalt API — free, cookie-free, no auth needed."""
+    import json
+    import uuid
+
+    logger.info("Attempting Cobalt API download for: %s", url)
+
+    # Clean the URL (remove tracking params)
+    clean_url = url.split("?")[0].rstrip("/")
+
+    headers = {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+    }
+    payload = {"url": clean_url}
+
+    resp = requests.post(
+        "https://api.cobalt.tools/",
+        headers=headers,
+        json=payload,
+        timeout=30,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+
+    logger.info("Cobalt API response: status=%s", data.get("status"))
+
+    status = data.get("status")
+    if status == "error":
+        raise RuntimeError(f"Cobalt API error: {data.get('error', {}).get('code', 'unknown')}")
+
+    # Cobalt returns either a direct URL or a tunnel URL
+    media_url = data.get("url") or (data.get("urls") or [None])[0]
+    if not media_url:
+        raise RuntimeError(f"Cobalt returned no downloadable URL. Response: {data}")
+
+    # Download the file
+    filename = str(uuid.uuid4())
+    ext = ".mp4" if data.get("filename", "").endswith(".mp4") else ".mp4"
+    filepath = os.path.join(output_dir, filename + ext)
+
+    dl_resp = requests.get(media_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=120, stream=True)
+    dl_resp.raise_for_status()
+
+    # Detect type from Content-Type
+    content_type = dl_resp.headers.get("Content-Type", "")
+    if "video" in content_type:
+        ext = ".mp4"
+    elif "image" in content_type:
+        ext = ".jpg"
+    filepath = os.path.join(output_dir, filename + ext)
+
+    with open(filepath, "wb") as f:
+        for chunk in dl_resp.iter_content(chunk_size=8192):
+            f.write(chunk)
+
+    media_type = "video" if ext == ".mp4" else "image"
+    logger.info("Cobalt downloaded %s (%s)", filepath, media_type)
+    return filepath, media_type, ""
 
 
 def _download_with_gallery_dl(url: str, output_dir: str) -> tuple[str | list[str], str, str]:
