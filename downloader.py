@@ -132,6 +132,7 @@ def download_instagram(url: str, output_dir: str) -> tuple[str | list[str], str,
         try:
             return _download_with_gallery_dl(url, output_dir)
         except Exception as gallery_e:
+            _gallery_err = gallery_e  # save before Python deletes it
             logger.warning("gallery-dl also failed: %s", gallery_e)
 
         # ── Fallback 2: Cobalt API (cookie-free public downloader) ────────
@@ -143,7 +144,7 @@ def download_instagram(url: str, output_dir: str) -> tuple[str | list[str], str,
             raise FileNotFoundError(
                 f"All download methods failed.\n"
                 f"yt-dlp: {e}\n"
-                f"gallery-dl: {gallery_e}\n"
+                f"gallery-dl: {_gallery_err}\n"
                 f"Cobalt: {cobalt_e}\n"
                 "Make sure the post is public and the URL is correct."
             ) from e
