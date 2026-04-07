@@ -127,6 +127,21 @@ def download_instagram(url: str, output_dir: str) -> tuple[str | list[str], str,
         return media_path, media_type, caption
 
     except (yt_dlp.utils.DownloadError, FileNotFoundError) as e:
+        err_str = str(e)
+
+        # Detect age-restricted / private posts early — no downloader can bypass these
+        restricted_keywords = [
+            "Restricted Post", "unavailable for certain audiences",
+            "This content may be inappropriate", "Login required",
+            "Private", "Sorry, this page isn't available"
+        ]
+        if any(kw.lower() in err_str.lower() for kw in restricted_keywords):
+            raise FileNotFoundError(
+                "🔒 This post is age-restricted or private.\n"
+                "Instagram is blocking all download tools from accessing it.\n"
+                "Please try a different, fully public post."
+            ) from e
+
         # ── Fallback 1: gallery-dl ────────────────────────────────────────
         logger.info("yt-dlp failed — trying gallery-dl for: %s", url)
         try:
@@ -172,7 +187,10 @@ def _download_with_cobalt(url: str, output_dir: str) -> tuple[str | list[str], s
         json=payload,
         timeout=30,
     )
-    resp.raise_for_status()
+
+    if resp.status_code != 200:
+        raise RuntimeError(f"Cobalt API returned HTTP {resp.status_code}: {resp.text[:200]}")
+
     data = resp.json()
 
     logger.info("Cobalt API response: status=%s", data.get("status"))
