@@ -146,11 +146,20 @@ def _download_with_gallery_dl(url: str, output_dir: str) -> tuple[str | list[str
     import json
     import glob
 
+    # Find gallery-dl.conf in the same directory as this script
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    gdl_conf = os.path.join(script_dir, "gallery-dl.conf")
+
     cmd = [
         "python", "-m", "gallery_dl",
         "--directory", output_dir,
         "--write-metadata"
     ]
+
+    if os.path.exists(gdl_conf):
+        cmd.extend(["--config", gdl_conf])
+        logger.info("Using gallery-dl config: %s", gdl_conf)
+
     if COOKIES_FILE and Path(COOKIES_FILE).is_file():
         cmd.extend(["--cookies", COOKIES_FILE])
     
