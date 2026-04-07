@@ -59,6 +59,7 @@ def _ydl_opts(output_dir: str) -> dict:
         "http_headers": _HTTP_HEADERS,
         "socket_timeout": 60,
         "retries": 5,
+        "age_limit": 99,  # attempt age-restricted content using session cookies
         "postprocessors": [
             {
                 "key": "FFmpegVideoConvertor",
@@ -128,19 +129,11 @@ def download_instagram(url: str, output_dir: str) -> tuple[str | list[str], str,
 
     except (yt_dlp.utils.DownloadError, FileNotFoundError) as e:
         err_str = str(e)
-
-        # Detect age-restricted / private posts early — no downloader can bypass these
-        restricted_keywords = [
+        is_restricted = any(kw.lower() in err_str.lower() for kw in [
             "Restricted Post", "unavailable for certain audiences",
             "This content may be inappropriate", "Login required",
-            "Private", "Sorry, this page isn't available"
-        ]
-        if any(kw.lower() in err_str.lower() for kw in restricted_keywords):
-            raise FileNotFoundError(
-                "🔒 This post is age-restricted or private.\n"
-                "Instagram is blocking all download tools from accessing it.\n"
-                "Please try a different, fully public post."
-            ) from e
+            "Sorry, this page isn't available"
+        ])
 
         # ── Fallback 1: gallery-dl ────────────────────────────────────────
         logger.info("yt-dlp failed — trying gallery-dl for: %s", url)
@@ -156,12 +149,17 @@ def download_instagram(url: str, output_dir: str) -> tuple[str | list[str], str,
             return _download_with_cobalt(url, output_dir)
         except Exception as cobalt_e:
             logger.exception("Cobalt API fallback also failed")
+            hint = (
+                "\n\n🔒 Note: This post appears to be age-restricted. "
+                "Your cookies should allow access — try refreshing them via Koyeb env vars."
+                if is_restricted else
+                "\nMake sure the post is public and the URL is correct."
+            )
             raise FileNotFoundError(
-                f"All download methods failed.\n"
+                f"All download methods failed.{hint}\n"
                 f"yt-dlp: {e}\n"
                 f"gallery-dl: {_gallery_err}\n"
-                f"Cobalt: {cobalt_e}\n"
-                "Make sure the post is public and the URL is correct."
+                f"Cobalt: {cobalt_e}"
             ) from e
 
 
