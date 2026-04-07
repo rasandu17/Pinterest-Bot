@@ -155,12 +155,94 @@ def download_instagram(url: str, output_dir: str) -> tuple[str | list[str], str,
                 if is_restricted else
                 "\nMake sure the post is public and the URL is correct."
             )
+            _cobalt_err = cobalt_e
+
+        # ── Fallback 3: instagrapi (full mobile app auth) ──────────────────
+        logger.info("Cobalt failed — trying instagrapi for: %s", url)
+        try:
+            return _download_with_instagrapi(url, output_dir)
+        except Exception as insta_e:
+            logger.exception("instagrapi fallback also failed")
+            hint = (
+                "\n\n🔒 This post is age-restricted. "
+                "Add INSTAGRAM_USERNAME + INSTAGRAM_PASSWORD to Koyeb env vars to enable full access."
+                if is_restricted else
+                "\nMake sure the post is public and the URL is correct."
+            )
             raise FileNotFoundError(
                 f"All download methods failed.{hint}\n"
                 f"yt-dlp: {e}\n"
                 f"gallery-dl: {_gallery_err}\n"
-                f"Cobalt: {cobalt_e}"
+                f"Cobalt: {_cobalt_err}\n"
+                f"instagrapi: {insta_e}"
             ) from e
+
+
+def _download_with_instagrapi(url: str, output_dir: str) -> tuple[str | list[str], str, str]:
+    """
+    4th-layer fallback using instagrapi — fully mimics the Instagram mobile app.
+    Requires INSTAGRAM_USERNAME and INSTAGRAM_PASSWORD environment variables.
+    Can download age-restricted and private (if followed) content.
+    """
+    import re
+    from pathlib import Path as _Path
+
+    username = os.getenv("INSTAGRAM_USERNAME", "").strip()
+    password = os.getenv("INSTAGRAM_PASSWORD", "").strip()
+
+    if not username or not password:
+        raise RuntimeError(
+            "instagrapi requires INSTAGRAM_USERNAME and INSTAGRAM_PASSWORD env vars. "
+            "Add them to your Koyeb environment variables!"
+        )
+
+    try:
+        from instagrapi import Client
+    except ImportError:
+        raise RuntimeError("instagrapi is not installed. Add it to requirements.txt!")
+
+    # Extract shortcode from URL
+    match = re.search(r'/(?:reel|p)/([A-Za-z0-9_-]+)', url)
+    if not match:
+        raise RuntimeError(f"Could not extract shortcode from URL: {url}")
+    shortcode = match.group(1)
+
+    cl = Client()
+    session_file = "instagrapi_session.json"
+
+    # Reuse saved session to avoid repeated logins (Instagram flags rapid logins)
+    if os.path.exists(session_file):
+        try:
+            cl.load_settings(session_file)
+            cl.login(username, password)
+            logger.info("instagrapi: reused saved session")
+        except Exception:
+            logger.warning("instagrapi: saved session expired, logging in fresh")
+            cl = Client()
+            cl.login(username, password)
+            cl.dump_settings(session_file)
+    else:
+        cl.login(username, password)
+        cl.dump_settings(session_file)
+        logger.info("instagrapi: logged in and saved session")
+
+    media_pk = cl.media_pk_from_code(shortcode)
+    media_info = cl.media_info(media_pk)
+    caption = media_info.caption_text or ""
+
+    if media_info.media_type == 2:  # Video / Reel
+        path = cl.video_download(media_pk, folder=output_dir)
+        logger.info("instagrapi downloaded video: %s", path)
+        return str(path), "video", caption
+    elif media_info.media_type == 8:  # Carousel / multi-photo
+        paths = cl.album_download(media_pk, folder=output_dir)
+        str_paths = [str(p) for p in paths]
+        logger.info("instagrapi downloaded album: %d items", len(str_paths))
+        return (str_paths[0] if len(str_paths) == 1 else str_paths), "image", caption
+    else:  # Photo
+        path = cl.photo_download(media_pk, folder=output_dir)
+        logger.info("instagrapi downloaded photo: %s", path)
+        return str(path), "image", caption
 
 
 def _download_with_cobalt(url: str, output_dir: str) -> tuple[str | list[str], str, str]:
