@@ -23,6 +23,10 @@ logger = logging.getLogger("TumblerBot.downloader")
 # Instagram cookies file (optional — improves success rate for private/login-walled content)
 COOKIES_FILE = os.getenv("INSTAGRAM_COOKIES_FILE", "")  # path to a Netscape cookies.txt
 
+# Residential proxy URL (e.g. from WebShare.io free tier)
+# Format: http://username:password@proxy-host:port
+PROXY_URL = os.getenv("PROXY_URL", "").strip()
+
 _HTTP_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -71,6 +75,10 @@ def _ydl_opts(output_dir: str) -> dict:
     if _FFMPEG_PATH:
         opts["ffmpeg_location"] = _FFMPEG_PATH
         logger.info("Using bundled ffmpeg: %s", _FFMPEG_PATH)
+
+    if PROXY_URL:
+        opts["proxy"] = PROXY_URL
+        logger.info("Using proxy for yt-dlp: %s", PROXY_URL[:30] + "...")
 
     opts.update(_cookie_opts())
     return opts
@@ -208,6 +216,9 @@ def _download_with_instagrapi(url: str, output_dir: str) -> tuple[str | list[str
     shortcode = match.group(1)
 
     cl = Client()
+    if PROXY_URL:
+        cl.set_proxy(PROXY_URL)
+        logger.info("instagrapi: using proxy %s", PROXY_URL[:30] + "...")
     session_file = "instagrapi_session.json"
 
     # Reuse saved session to avoid repeated logins (Instagram flags rapid logins)
@@ -246,67 +257,75 @@ def _download_with_instagrapi(url: str, output_dir: str) -> tuple[str | list[str
 
 
 def _download_with_cobalt(url: str, output_dir: str) -> tuple[str | list[str], str, str]:
-    """Third-layer fallback using Cobalt API — free, cookie-free, no auth needed."""
+    """Third-layer fallback using Cobalt — tries multiple public instances."""
     import json
     import uuid
 
-    logger.info("Attempting Cobalt API download for: %s", url)
+    # Try multiple public Cobalt instances (some may not require JWT)
+    COBALT_INSTANCES = [
+        "https://cobalt.api.timelessnesses.me/",
+        "https://co.wuk.sh/",
+        "https://cobalt.tools/api/json",
+    ]
 
-    # Clean the URL (remove tracking params)
     clean_url = url.split("?")[0].rstrip("/")
+    proxies = {"http": PROXY_URL, "https": PROXY_URL} if PROXY_URL else None
 
-    headers = {
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-    }
-    payload = {"url": clean_url}
+    last_error = None
+    for instance in COBALT_INSTANCES:
+        try:
+            logger.info("Trying Cobalt instance: %s", instance)
+            headers = {"Accept": "application/json", "Content-Type": "application/json"}
+            resp = requests.post(
+                instance,
+                headers=headers,
+                json={"url": clean_url},
+                timeout=20,
+                proxies=proxies,
+            )
+            if resp.status_code != 200:
+                last_error = f"HTTP {resp.status_code}: {resp.text[:100]}"
+                continue
 
-    resp = requests.post(
-        "https://api.cobalt.tools/",
-        headers=headers,
-        json=payload,
-        timeout=30,
-    )
+            data = resp.json()
+            if data.get("status") == "error":
+                last_error = f"API error: {data.get('error', {}).get('code', 'unknown')}"
+                continue
 
-    if resp.status_code != 200:
-        raise RuntimeError(f"Cobalt API returned HTTP {resp.status_code}: {resp.text[:200]}")
+            media_url = data.get("url") or (data.get("urls") or [None])[0]
+            if not media_url:
+                last_error = f"No URL in response: {data}"
+                continue
 
-    data = resp.json()
+            # Download the actual file
+            filename = str(uuid.uuid4())
+            dl_resp = requests.get(
+                media_url,
+                headers={"User-Agent": "Mozilla/5.0"},
+                timeout=120,
+                stream=True,
+                proxies=proxies,
+            )
+            dl_resp.raise_for_status()
 
-    logger.info("Cobalt API response: status=%s", data.get("status"))
+            content_type = dl_resp.headers.get("Content-Type", "")
+            ext = ".mp4" if "video" in content_type else ".jpg"
+            filepath = os.path.join(output_dir, filename + ext)
 
-    status = data.get("status")
-    if status == "error":
-        raise RuntimeError(f"Cobalt API error: {data.get('error', {}).get('code', 'unknown')}")
+            with open(filepath, "wb") as f:
+                for chunk in dl_resp.iter_content(chunk_size=8192):
+                    f.write(chunk)
 
-    # Cobalt returns either a direct URL or a tunnel URL
-    media_url = data.get("url") or (data.get("urls") or [None])[0]
-    if not media_url:
-        raise RuntimeError(f"Cobalt returned no downloadable URL. Response: {data}")
+            media_type = "video" if ext == ".mp4" else "image"
+            logger.info("Cobalt (%s) downloaded %s (%s)", instance, filepath, media_type)
+            return filepath, media_type, ""
 
-    # Download the file
-    filename = str(uuid.uuid4())
-    ext = ".mp4" if data.get("filename", "").endswith(".mp4") else ".mp4"
-    filepath = os.path.join(output_dir, filename + ext)
+        except Exception as ex:
+            last_error = str(ex)
+            logger.warning("Cobalt instance %s failed: %s", instance, ex)
+            continue
 
-    dl_resp = requests.get(media_url, headers={"User-Agent": "Mozilla/5.0"}, timeout=120, stream=True)
-    dl_resp.raise_for_status()
-
-    # Detect type from Content-Type
-    content_type = dl_resp.headers.get("Content-Type", "")
-    if "video" in content_type:
-        ext = ".mp4"
-    elif "image" in content_type:
-        ext = ".jpg"
-    filepath = os.path.join(output_dir, filename + ext)
-
-    with open(filepath, "wb") as f:
-        for chunk in dl_resp.iter_content(chunk_size=8192):
-            f.write(chunk)
-
-    media_type = "video" if ext == ".mp4" else "image"
-    logger.info("Cobalt downloaded %s (%s)", filepath, media_type)
-    return filepath, media_type, ""
+    raise RuntimeError(f"All Cobalt instances failed. Last error: {last_error}")
 
 
 def _download_with_gallery_dl(url: str, output_dir: str) -> tuple[str | list[str], str, str]:
